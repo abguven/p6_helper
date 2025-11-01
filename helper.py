@@ -5,6 +5,15 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import os
 from typing import Tuple, Literal, overload
+from sklearn.metrics import (
+    r2_score,
+    mean_absolute_error,
+    mean_squared_error,
+    mean_absolute_percentage_error,
+    median_absolute_error,
+    explained_variance_score,
+    max_error,
+)
 
 _VERBOSE_ICONS = {
     "info": "ℹ️",
@@ -265,3 +274,123 @@ def filter_by_malus_level(
 
 
     return filtered
+
+
+def regression_metrics_frame(
+    y_true_test,
+    y_pred_test,
+    y_true_train=None,
+    y_pred_train=None,
+    verbose: bool = False,
+) -> pd.DataFrame:
+    """Return regression metrics in a tidy DataFrame.
+
+    Parameters
+    ----------
+    y_true_test, y_pred_test : array-like
+        Ground truth and predictions for the test split.
+    y_true_train, y_pred_train : array-like, optional
+        Ground truth and predictions for the train split. When both are
+        provided, train metrics are computed as well.
+    verbose : bool, default=False
+        If ``True``, pretty-prints the computed metrics and basic test error
+        statistics.
+
+    Returns
+    -------
+    pd.DataFrame
+        A dataframe indexed by metric name with two columns: ``train`` and
+        ``test``.
+
+    Notes
+    -----
+    When ``verbose`` is ``True`` and train metrics are available, the helper
+    emits an overfitting warning if the train R² exceeds the test R² by more
+    than 0.15.
+
+    Raises
+    ------
+    ValueError
+        If only one of ``y_true_train`` or ``y_pred_train`` is provided.
+    """
+
+    overfit_threshold = 0.15
+
+    metric_functions = {
+        "R2": r2_score,
+        "MAE": mean_absolute_error,
+        "RMSE": lambda y_true, y_pred: np.sqrt(mean_squared_error(y_true, y_pred)),
+        "MAPE(%)": lambda y_true, y_pred: mean_absolute_percentage_error(y_true, y_pred) * 100,
+        "MedianAE": median_absolute_error,
+        "ExplainedVar": explained_variance_score,
+        "MaxError": max_error,
+    }
+
+    def _compute_metrics(y_true, y_pred):
+        y_true_arr = np.asarray(y_true)
+        y_pred_arr = np.asarray(y_pred)
+        return {
+            name: func(y_true_arr, y_pred_arr)
+            for name, func in metric_functions.items()
+        }
+
+    test_metrics = _compute_metrics(y_true_test, y_pred_test)
+
+    has_train_targets = y_true_train is not None
+    has_train_predictions = y_pred_train is not None
+
+    if has_train_targets != has_train_predictions:
+        raise ValueError(
+            "Both 'y_true_train' and 'y_pred_train' are required to compute train metrics."
+        )
+
+    include_train = has_train_targets and has_train_predictions
+    if include_train:
+        train_metrics = _compute_metrics(y_true_train, y_pred_train)
+    else:
+        train_metrics = {name: np.nan for name in metric_functions}
+
+    metrics_df = pd.DataFrame({
+        "train": pd.Series(train_metrics),
+        "test": pd.Series(test_metrics),
+    }).loc[list(metric_functions.keys()), ["train", "test"]]
+
+    if verbose:
+        def _format_metrics(metrics):
+            return "\n".join(
+                f"{metric:12s}: {value:,.4f}" if isinstance(value, (int, float, np.floating)) else f"{metric:12s}: {value}"
+                for metric, value in metrics.items()
+            )
+
+        _emit(verbose, "result", "=== METRICS TEST ===\n" + _format_metrics(test_metrics))
+
+        if include_train:
+            _emit(verbose, "result", "=== METRICS TRAIN ===\n" + _format_metrics(train_metrics))
+
+            r2_gap = train_metrics["R2"] - test_metrics["R2"]
+            if r2_gap > overfit_threshold:
+                _emit(
+                    verbose,
+                    "bounds",
+                    (
+                        "⚠️ Possible overfitting detected: Train R2 "
+                        f"({train_metrics['R2']:.4f}) exceeds Test R2 "
+                        f"({test_metrics['R2']:.4f}) by {r2_gap:.4f} (threshold {overfit_threshold:.2f})."
+                    ),
+                )
+        else:
+            _emit(
+                verbose,
+                "info",
+                "=== METRICS TRAIN ===\nTrain metrics not computed (provide both 'y_true_train' and 'y_pred_train').",
+            )
+
+        errors = np.asarray(y_true_test) - np.asarray(y_pred_test)
+        _emit(
+            verbose,
+            "info",
+            "Erreur (y_true - y_pred) — test :\n"
+            + f"  mean: {errors.mean():,.4f} | std: {errors.std():,.4f} | median: {np.median(errors):,.4f}",
+        )
+
+    return metrics_df

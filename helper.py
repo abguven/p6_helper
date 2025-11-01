@@ -302,11 +302,19 @@ def regression_metrics_frame(
         A dataframe indexed by metric name with two columns: ``train`` and
         ``test``.
 
+    Notes
+    -----
+    When ``verbose`` is ``True`` and train metrics are available, the helper
+    emits an overfitting warning if the train R² exceeds the test R² by more
+    than 0.15.
+
     Raises
     ------
     ValueError
         If only one of ``y_true_train`` or ``y_pred_train`` is provided.
     """
+
+    overfit_threshold = 0.15
 
     metric_functions = {
         "R2": r2_score,
@@ -354,16 +362,28 @@ def regression_metrics_frame(
                 for metric, value in metrics.items()
             )
 
+        _emit(verbose, "result", "=== METRICS TEST ===\n" + _format_metrics(test_metrics))
+
         if include_train:
             _emit(verbose, "result", "=== METRICS TRAIN ===\n" + _format_metrics(train_metrics))
+
+            r2_gap = train_metrics["R2"] - test_metrics["R2"]
+            if r2_gap > overfit_threshold:
+                _emit(
+                    verbose,
+                    "bounds",
+                    (
+                        "⚠️ Possible overfitting detected: Train R2 "
+                        f"({train_metrics['R2']:.4f}) exceeds Test R2 "
+                        f"({test_metrics['R2']:.4f}) by {r2_gap:.4f} (threshold {overfit_threshold:.2f})."
+                    ),
+                )
         else:
             _emit(
                 verbose,
                 "info",
                 "=== METRICS TRAIN ===\nTrain metrics not computed (provide both 'y_true_train' and 'y_pred_train').",
             )
-
-        _emit(verbose, "result", "=== METRICS TEST ===\n" + _format_metrics(test_metrics))
 
         errors = np.asarray(y_true_test) - np.asarray(y_pred_test)
         _emit(

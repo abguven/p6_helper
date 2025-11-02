@@ -36,6 +36,89 @@ def _emit(verbose: bool, icon_key: str, message: str) -> None:
     print(f"{icon} {message}")
 
 
+def features_to_scale(
+    df: pd.DataFrame,
+    exclude_binary: bool = True,
+    verbose: bool = True,
+) -> list[str]:
+    """Return numeric feature names suitable for scaling.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataset containing candidate features.
+    exclude_binary : bool, default=True
+        When ``True``, drops columns whose non-null values are restricted to
+        ``{0, 1}`` (after coercing boolean values to integers) from the result.
+
+    verbose : bool, default=True
+        If ``True``, reports diagnostic information via ``_emit``.
+
+    Returns
+    -------
+    list[str]
+        Ordered column names that should be passed to a scaler.
+    """
+
+    numeric_df = df.select_dtypes(include=[np.number])
+
+    numeric_columns = list(numeric_df.columns)
+    _emit(
+        verbose,
+        "info",
+        f"Identified {len(numeric_columns)} numeric column(s) out of {df.shape[1]} total.",
+    )
+
+    if not numeric_columns:
+        _emit(verbose, "result", "No numeric columns available for scaling.")
+        return []
+
+    if not exclude_binary:
+        _emit(
+            verbose,
+            "result",
+            f"Returning all {len(numeric_columns)} numeric column(s) for scaling.",
+        )
+        return numeric_columns
+
+    binary_columns: list[str] = []
+    scale_columns: list[str] = []
+
+    for column in numeric_columns:
+        series = numeric_df[column].dropna()
+        if series.empty:
+            scale_columns.append(column)
+            continue
+
+        # ``set(series.unique())`` mirrors the user's notebook approach while
+        # normalising boolean values (True/False) to numeric {1.0, 0.0}.
+        unique_values = set(pd.unique(series))
+        normalized_values = {float(value) for value in unique_values}
+
+        if normalized_values <= {0.0, 1.0}:
+            binary_columns.append(column)
+        else:
+            scale_columns.append(column)
+
+    if binary_columns:
+        preview = ", ".join(binary_columns[:5])
+        remainder = "" if len(binary_columns) <= 5 else f" (+{len(binary_columns) - 5} more)"
+        _emit(
+            verbose,
+            "update",
+            f"Excluded {len(binary_columns)} strictly binary column(s): {preview}{remainder}",
+        )
+    else:
+        _emit(verbose, "update", "No strictly binary columns detected.")
+
+    _emit(
+        verbose,
+        "result",
+        f"Returning {len(scale_columns)} column(s) ready for scaling.",
+    )
+    return scale_columns
+
+
 def export_use_type_summary(df, columns, output_path, overwrite=False):
     """
     Create a CSV summary of unique building use types by column.

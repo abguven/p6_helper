@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import matplotlib.pyplot as plt
 import os
-from typing import Iterable, Tuple, Literal, overload
+from typing import Tuple, Literal, overload
 from sklearn.metrics import (
     r2_score,
     mean_absolute_error,
@@ -36,24 +36,13 @@ def _emit(verbose: bool, icon_key: str, message: str) -> None:
     print(f"{icon} {message}")
 
 
-def get_binary_features(
-    df: pd.DataFrame,
-    *,
-    columns: Iterable[str] | None = None,
-    numeric_only: bool = True,
-    verbose: bool = True,
-) -> list[str]:
-    """Return columns whose non-null values are constrained to ``{0, 1}``.
+def get_binary_features(df: pd.DataFrame, verbose: bool = True) -> list[str]:
+    """Return numeric columns whose non-null values are constrained to ``{0, 1}``.
 
     Parameters
     ----------
     df : pd.DataFrame
         Dataset containing candidate columns.
-    columns : Iterable[str], optional
-        If provided, restricts the search to the supplied column names.
-    numeric_only : bool, default=True
-        When ``True``, only numeric (and boolean) dtypes are considered even if
-        ``columns`` is omitted.
     verbose : bool, default=True
         If ``True``, reports diagnostic information via ``_emit``.
 
@@ -63,15 +52,7 @@ def get_binary_features(
         Ordered column names whose observed values are strictly binary.
     """
 
-    if columns is not None:
-        missing = [column for column in columns if column not in df.columns]
-        if missing:
-            raise KeyError(f"DataFrame does not contain column(s): {missing}")
-        candidate_df = df.loc[:, list(columns)]
-    elif numeric_only:
-        candidate_df = df.select_dtypes(include=[np.number, "boolean"])
-    else:
-        candidate_df = df
+    candidate_df = df.select_dtypes(include=[np.number, "boolean"])
 
     candidate_columns = list(candidate_df.columns)
     _emit(
@@ -152,13 +133,9 @@ def get_features_to_scale(
         )
         return numeric_columns
 
-    binary_columns = get_binary_features(
-        df,
-        columns=numeric_columns,
-        numeric_only=False,
-        verbose=verbose,
-    )
-    binary_set = set(binary_columns)
+    binary_columns = get_binary_features(df, verbose=verbose)
+    binary_set = {column for column in binary_columns if column in numeric_columns}
+    binary_columns = sorted(binary_set, key=numeric_columns.index)
     scale_columns = [column for column in numeric_columns if column not in binary_set]
 
     if binary_columns:

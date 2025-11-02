@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import matplotlib.pyplot as plt
 import os
-from typing import Tuple, Literal, overload
+from typing import Iterable, Tuple, Literal, overload
 from sklearn.metrics import (
     r2_score,
     mean_absolute_error,
@@ -36,7 +36,78 @@ def _emit(verbose: bool, icon_key: str, message: str) -> None:
     print(f"{icon} {message}")
 
 
-def features_to_scale(
+def get_binary_features(
+    df: pd.DataFrame,
+    *,
+    columns: Iterable[str] | None = None,
+    numeric_only: bool = True,
+    verbose: bool = True,
+) -> list[str]:
+    """Return columns whose non-null values are constrained to ``{0, 1}``.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Dataset containing candidate columns.
+    columns : Iterable[str], optional
+        If provided, restricts the search to the supplied column names.
+    numeric_only : bool, default=True
+        When ``True``, only numeric (and boolean) dtypes are considered even if
+        ``columns`` is omitted.
+    verbose : bool, default=True
+        If ``True``, reports diagnostic information via ``_emit``.
+
+    Returns
+    -------
+    list[str]
+        Ordered column names whose observed values are strictly binary.
+    """
+
+    if columns is not None:
+        missing = [column for column in columns if column not in df.columns]
+        if missing:
+            raise KeyError(f"DataFrame does not contain column(s): {missing}")
+        candidate_df = df.loc[:, list(columns)]
+    elif numeric_only:
+        candidate_df = df.select_dtypes(include=[np.number, "boolean"])
+    else:
+        candidate_df = df
+
+    candidate_columns = list(candidate_df.columns)
+    _emit(
+        verbose,
+        "info",
+        f"Scanning {len(candidate_columns)} column(s) for strictly binary values.",
+    )
+
+    binary_columns: list[str] = []
+
+    for column in candidate_columns:
+        series = candidate_df[column].dropna()
+        if series.empty:
+            continue
+
+        unique_values = set(pd.unique(series))
+        normalized_values = {float(value) for value in unique_values}
+
+        if normalized_values <= {0.0, 1.0}:
+            binary_columns.append(column)
+
+    if binary_columns:
+        preview = ", ".join(binary_columns[:5])
+        remainder = "" if len(binary_columns) <= 5 else f" (+{len(binary_columns) - 5} more)"
+        _emit(
+            verbose,
+            "result",
+            f"Identified {len(binary_columns)} strictly binary column(s): {preview}{remainder}",
+        )
+    else:
+        _emit(verbose, "result", "No strictly binary columns detected.")
+
+    return binary_columns
+
+
+def get_features_to_scale(
     df: pd.DataFrame,
     exclude_binary: bool = True,
     verbose: bool = True,
@@ -81,35 +152,21 @@ def features_to_scale(
         )
         return numeric_columns
 
-    binary_columns: list[str] = []
-    scale_columns: list[str] = []
-
-    for column in numeric_columns:
-        series = numeric_df[column].dropna()
-        if series.empty:
-            scale_columns.append(column)
-            continue
-
-        # ``set(series.unique())`` mirrors the user's notebook approach while
-        # normalising boolean values (True/False) to numeric {1.0, 0.0}.
-        unique_values = set(pd.unique(series))
-        normalized_values = {float(value) for value in unique_values}
-
-        if normalized_values <= {0.0, 1.0}:
-            binary_columns.append(column)
-        else:
-            scale_columns.append(column)
+    binary_columns = get_binary_features(
+        df,
+        columns=numeric_columns,
+        numeric_only=False,
+        verbose=verbose,
+    )
+    binary_set = set(binary_columns)
+    scale_columns = [column for column in numeric_columns if column not in binary_set]
 
     if binary_columns:
-        preview = ", ".join(binary_columns[:5])
-        remainder = "" if len(binary_columns) <= 5 else f" (+{len(binary_columns) - 5} more)"
         _emit(
             verbose,
             "update",
-            f"Excluded {len(binary_columns)} strictly binary column(s): {preview}{remainder}",
+            f"Excluded {len(binary_columns)} strictly binary column(s) from scaling.",
         )
-    else:
-        _emit(verbose, "update", "No strictly binary columns detected.")
 
     _emit(
         verbose,
